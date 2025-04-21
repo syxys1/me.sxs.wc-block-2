@@ -1,0 +1,494 @@
+<?php
+/**
+ * Category Accordion Block
+ *
+ * @package SXS_WC_Blocks
+ */
+
+defined('ABSPATH') || exit;
+
+/**
+ * Class SXS_Category_Accordion_Block
+ * 
+ * Handles the registration and rendering of the Category Accordion block.
+ */
+class SXS_Category_Accordion_Block {
+    /**
+     * Singleton instance
+     *
+     * @var SXS_Category_Accordion_Block
+     */
+    private static $instance = null;
+    
+    /**
+     * Block name
+     *
+     * @var string
+     */
+    private $block_name = 'me-sxs-block/category-accordion';
+    
+    /**
+     * Get singleton instance
+     *
+     * @return SXS_Category_Accordion_Block
+     */
+    public static function get_instance() {
+        if (self::$instance === null) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+    
+    /**
+     * Private constructor to prevent direct instantiation
+     */
+    private function __construct() {
+        // Register the block
+        add_action('init', [$this, 'register_block']);
+        // Add frontend scripts for accordion functionality
+        add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
+
+    }
+    
+    /**
+     * Register the block
+     */
+    public function register_block() {
+        if (!function_exists('register_block_type')) {
+            return;
+        }
+        
+        register_block_type($this->block_name, [
+            'editor_script'   => 'sxs-category-accordion-editor-script',
+            'editor_style'    => 'sxs-category-accordion-editor-style',
+            'style'           => 'sxs-category-accordion-style',
+            'render_callback' => [$this, 'render'],
+            'attributes'      => [
+                'excludeCategories' => [
+                    'type'    => 'array',
+                    'default' => [],
+                ],
+                'showProductCount' => [
+                    'type'    => 'boolean',
+                    'default' => true,
+                ],
+                'showFeaturedProducts' => [
+                    'type'    => 'boolean',
+                    'default' => true,
+                ],
+                'productsPerCategory' => [
+                    'type'    => 'number',
+                    'default' => 3,
+                ],
+                'expandFirstLevel' => [
+                    'type'    => 'boolean',
+                    'default' => true,
+                ],
+            ],
+        ]);
+        
+        // Register scripts and styles
+        $this->register_assets();
+    }
+    
+    /**
+     * Register block assets
+     */
+    private function register_assets() {
+        $block_slug = 'category-accordion';
+        
+        // Editor styles
+        $src_dir = file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . "build/{$block_slug}-editor.css") 
+            ? "build/" : "css/";
+        if (file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.css")) {
+            wp_register_style(
+                "sxs-{$block_slug}-editor-style",
+                SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}-editor.css",
+                ['wp-edit-blocks'],
+                filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.css")
+            );
+        }
+        
+        // Frontend styles
+        $src_dir = file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . "build/{$block_slug}.css") 
+            ? "build/" : "css/";
+        if (file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}.css")) {
+            wp_register_style(
+                "sxs-{$block_slug}-style",
+                SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}.css",
+                [],
+                filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}.css")
+            );
+        }
+        
+        // Editor script
+        $src_dir = file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . "build/{$block_slug}-editor.js") 
+            ? "build/" : "js/";
+        if (file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.js")) {
+            wp_register_script(
+                "sxs-{$block_slug}-editor-script",
+                SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}-editor.js",
+                ['wp-blocks', 'wp-element', 'wp-editor', 'wp-components', 'wp-i18n'],
+                filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.js"),
+                true
+            );
+        }
+    }
+
+    /**
+     * Enqueue frontend scripts for accordion functionality
+     */
+    public function enqueue_frontend_scripts() {
+        if (!is_shop() && !is_product_category()) {
+            return;
+        }
+        
+        wp_enqueue_script(
+            'sxs-category-accordion-script',
+            SXS_WC_BLOCKS_PLUGIN_URL . 'js/category-accordion.js',
+            ['jquery'],
+            filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . 'js/category-accordion.js'),
+            true
+        );
+    }
+    
+    /**
+     * Render the block
+     *
+     * @param array $attributes Block attributes
+     * @return string Rendered block HTML
+     */
+    public function render($attributes) {
+        // Extract attributes with defaults
+        $exclude_categories = isset($attributes['excludeCategories']) ? $attributes['excludeCategories'] : [];
+        $show_product_count = isset($attributes['showProductCount']) ? $attributes['showProductCount'] : true;
+        $show_featured_products = isset($attributes['showFeaturedProducts']) ? $attributes['showFeaturedProducts'] : true;
+        $products_per_category = isset($attributes['productsPerCategory']) ? $attributes['productsPerCategory'] : 3;
+        $expand_first_level = isset($attributes['expandFirstLevel']) ? $attributes['expandFirstLevel'] : true;
+        
+        // Get product categories
+        $categories = $this->get_product_categories($exclude_categories);
+        
+        if (empty($categories)) {
+            return '<div class="sxs-category-accordion-empty">' . __('No categories found.', 'sxs-wc-block') . '</div>';
+        }
+        
+        // Build the accordion HTML
+        $output = '<div class="sxs-accordion-container">';
+        $output .= $this->build_category_accordion($categories, 0, [
+            'show_product_count' => $show_product_count,
+            'show_featured_products' => $show_featured_products,
+            'products_per_category' => $products_per_category,
+            'expand_first_level' => $expand_first_level,
+        ]);
+        $output .= '</div>';
+        
+        return $output;
+    }
+    
+    /**
+     * Get product categories
+     *
+     * @param array $exclude_categories Categories to exclude
+     * @return array Product categories
+     */
+    private function get_product_categories($exclude_categories = []) {
+        $args = [
+            'taxonomy'   => 'product_cat',
+            'hide_empty' => false,
+            'orderby'    => 'name',
+            'order'      => 'ASC',
+        ];
+        
+        if (!empty($exclude_categories)) {
+            $args['exclude'] = $exclude_categories;
+        }
+        
+        $categories = get_terms($args);
+        
+        if (is_wp_error($categories)) {
+            sxs_log('Error getting product categories: ' . $categories->get_error_message(), 'ERROR');
+            return [];
+        }
+        
+        return $categories;
+    }
+    
+    /**
+     * Build category accordion
+     *
+     * @param array $categories All categories
+     * @param int $parent_id Parent category ID
+     * @param array $options Display options
+     * @return string HTML for the category accordion
+     */
+    private function build_category_accordion($categories, $parent_id = 0, $options = []) {
+        $output = '<ul class="sxs-accordion' . ($parent_id === 0 ? ' sxs-accordion-root' : '') . '">';
+        
+        $current_category_id = 0;
+        if (is_product_category()) {
+            $current_category = get_queried_object();
+            $current_category_id = $current_category->term_id;
+        }
+        
+        foreach ($categories as $category) {
+            if ($category->parent !== $parent_id) {
+                continue;
+            }
+            
+            $has_children = $this->has_children($categories, $category->term_id);
+            $category_link = get_term_link($category, 'product_cat');
+            $is_current = ($category->term_id === $current_category_id);
+            $is_parent_of_current = $this->is_parent_of_current($categories, $category->term_id, $current_category_id);
+            
+            // Determine if this category should be expanded
+            $is_expanded = $is_current || $is_parent_of_current || 
+                           ($parent_id === 0 && $options['expand_first_level']);
+            
+            $output .= '<li class="sxs-accordion-item' . 
+                       ($has_children ? ' has-children' : '') . 
+                       ($is_current ? ' is-current' : '') . 
+                       ($is_expanded ? ' is-expanded' : '') . '">';
+            
+            $output .= '<div class="sxs-accordion-header">';
+            $output .= '<a href="' . esc_url($category_link) . '" class="sxs-accordion-title">';
+            $output .= esc_html($category->name);
+            
+            // Show product count if enabled
+            if ($options['show_product_count']) {
+                $product_count = $category->count;
+                $output .= ' <span class="sxs-product-count">(' . $product_count . ')</span>';
+            }
+            
+            $output .= '</a>';
+            
+            if ($has_children) {
+                $output .= '<button class="sxs-accordion-toggle" aria-expanded="' . ($is_expanded ? 'true' : 'false') . '">';
+                $output .= '<span class="screen-reader-text">' . __('Toggle subcategories', 'sxs-wc-block') . '</span>';
+                $output .= '<span class="sxs-toggle-icon"></span>';
+                $output .= '</button>';
+            }
+            
+            $output .= '</div>'; // .sxs-accordion-header
+            
+            // Category content (subcategories and featured products)
+            $output .= '<div class="sxs-accordion-content" ' . ($is_expanded ? '' : 'style="display:none;"') . '>';
+            
+            // Show featured products if enabled
+            if ($options['show_featured_products']) {
+                $featured_products = $this->get_featured_products($category->term_id, $options['products_per_category']);
+                if (!empty($featured_products)) {
+                    $output .= '<div class="sxs-featured-products">';
+                    $output .= '<h4 class="sxs-featured-title">' . __('Featured Products', 'sxs-wc-block') . '</h4>';
+                    $output .= '<ul class="sxs-product-list">';
+                    
+                    foreach ($featured_products as $product) {
+                        $output .= $this->render_product_item($product);
+                    }
+                    
+                    $output .= '</ul>';
+                    $output .= '</div>'; // .sxs-featured-products
+                }
+            }
+            
+            // Render subcategories if any
+            if ($has_children) {
+                $output .= $this->build_category_accordion($categories, $category->term_id, $options);
+            }
+            
+            $output .= '</div>'; // .sxs-accordion-content
+            $output .= '</li>';
+        }
+        
+        $output .= '</ul>';
+        
+        return $output;
+    }
+
+    /**
+     * Check if a category is a parent of the current category
+     *
+     * @param array $categories All categories
+     * @param int $category_id Category ID to check
+     * @param int $current_id Current category ID
+     * @return bool True if the category is a parent of the current
+     */
+    private function is_parent_of_current($categories, $category_id, $current_id) {
+        if ($current_id === 0) {
+            return false;
+        }
+        
+        foreach ($categories as $category) {
+            if ($category->term_id === $current_id && $category->parent === $category_id) {
+                return true;
+            }
+        }
+        
+        // Check if it's a parent of a parent (recursive)
+        foreach ($categories as $category) {
+            if ($category->parent === $category_id && 
+                $this->is_parent_of_current($categories, $category->term_id, $current_id)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Get featured products for a category
+     *
+     * @param int $category_id Category ID
+     * @param int $limit Number of products to get
+     * @return array Array of WC_Product objects
+     */
+    private function get_featured_products($category_id, $limit = 3) {
+        $args = [
+            'post_type'      => 'product',
+            'posts_per_page' => $limit,
+            'tax_query'      => [
+                [
+                    'taxonomy' => 'product_cat',
+                    'field'    => 'term_id',
+                    'terms'    => $category_id,
+                ],
+            ],
+            'meta_query'     => [
+                [
+                    'key'   => '_featured',
+                    'value' => 'yes',
+                ],
+            ],
+        ];
+        
+        $products = [];
+        $query = new WP_Query($args);
+        
+        if ($query->have_posts()) {
+            while ($query->have_posts()) {
+                $query->the_post();
+                $products[] = wc_get_product(get_the_ID());
+            }
+            wp_reset_postdata();
+        }
+        
+        // If we don't have enough featured products, get regular products
+        if (count($products) < $limit) {
+            $remaining = $limit - count($products);
+            $regular_products = $this->get_regular_products($category_id, $remaining, $products);
+            $products = array_merge($products, $regular_products);
+        }
+        
+        return $products;
+    }
+
+    /**
+     * Get regular products for a category
+     *
+     * @param int $category_id Category ID
+     * @param int $limit Number of products to get
+     * @param array $exclude_products Products to exclude
+     * @return array Array of WC_Product objects
+     */
+    private function get_regular_products($category_id, $limit = 3, $exclude_products = []) {
+        $exclude_ids = [];
+        foreach ($exclude_products as $product) {
+            $exclude_ids[] = $product->get_id();
+        }
+        
+        $args = [
+            'post_type'      => 'product',
+            'posts_per_page' => $limit,
+            'post__not_in'   => $exclude_ids,
+            'tax_query'      => [
+                [
+                    'taxonomy' => 'product_cat',
+                    'field'    => 'term_id',
+                    'terms'    => $category_id,
+                ],
+            ],
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+        ];
+        
+        $products = [];
+        $query = new WP_Query($args);
+        
+        if ($query->have_posts()) {
+            while ($query->have_posts()) {
+                $query->the_post();
+                $products[] = wc_get_product(get_the_ID());
+            }
+            wp_reset_postdata();
+        }
+        
+        return $products;
+    }
+
+    /**
+     * Render a product item
+     *
+     * @param WC_Product $product Product object
+     * @return string HTML for the product item
+     */
+    private function render_product_item($product) {
+        if (!$product) {
+            return '';
+        }
+        
+        $product_id = $product->get_id();
+        $product_name = $product->get_name();
+        $product_link = get_permalink($product_id);
+        $product_price = $product->get_price_html();
+        $product_image = $product->get_image('woocommerce_thumbnail');
+        
+        $output = '<li class="sxs-product-item">';
+        $output .= '<a href="' . esc_url($product_link) . '" class="sxs-product-link">';
+        
+        // Product image
+        $output .= '<div class="sxs-product-image">';
+        $output .= $product_image;
+        $output .= '</div>';
+        
+        // Product details
+        $output .= '<div class="sxs-product-details">';
+        $output .= '<h5 class="sxs-product-title">' . esc_html($product_name) . '</h5>';
+        $output .= '<div class="sxs-product-price">' . $product_price . '</div>';
+        $output .= '</div>';
+        
+        $output .= '</a>';
+        $output .= '</li>';
+        
+        return $output;
+    }
+  
+    
+    /**
+     * Check if a category has children
+     *
+     * @param array $categories All categories
+     * @param int $parent_id Parent category ID
+     * @return bool True if the category has children
+     */
+    private function has_children($categories, $parent_id) {
+        foreach ($categories as $category) {
+            if ($category->parent === $parent_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+// Initialize the block
+function sxs_category_accordion_init() {
+    return SXS_Category_Accordion_Block::get_instance();
+}
+
+// Register the block
+sxs_category_accordion_init();
+
+// Legacy function for backward compatibility
+function sxs_category_accordion_render($attributes) {
+    return SXS_Category_Accordion_Block::get_instance()->render($attributes);
+}

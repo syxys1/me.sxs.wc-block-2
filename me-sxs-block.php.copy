@@ -1,0 +1,692 @@
+<?php
+/**
+ * Plugin Name: SXS WC Blocks
+ * Description: SXS Custom WooCommerce blocks
+ * Version: 1.0.3
+ * Author: Sylvain Plante
+ * License: GPL-3.0-or-later
+ * Text Domain: sxs-wc-block
+ * Requires at least: 5.8
+ * Requires PHP: 7.2
+ * WC requires at least: 5.0.0
+ * WC tested up to: 8.6.0
+ * WC HPOS Compatible: yes
+ */
+
+defined('ABSPATH') || exit;
+
+/** Définition des constantes uniquement si elles ne le sont pas déjà */
+if (!defined('SXS_WC_BLOCKS_PLUGIN_PATH')) {
+    define('SXS_WC_BLOCKS_PLUGIN_PATH', plugin_dir_path(__FILE__));
+}
+if (!defined('SXS_WC_BLOCKS_PLUGIN_URL')) {
+    define('SXS_WC_BLOCKS_PLUGIN_URL', plugin_dir_url(__FILE__));
+}
+if (!defined('SXS_WC_BLOCKS_DEBUG')) {
+    define('SXS_WC_BLOCKS_DEBUG', true); // Passez à true en développement
+}
+if (!defined('SXS_CONTEXT_NONE')) {
+    define('SXS_CONTEXT_NONE', 0); // No valid context
+}
+if (!defined('SXS_CONTEXT_GUTENBERG')) {
+    define('SXS_CONTEXT_GUTENBERG', 1); // In Gutenberg Editor
+}
+if (!defined('SXS_CONTEXT_SHOP')) {
+    define('SXS_CONTEXT_SHOP', 2); // On front end shop page
+}
+if (!defined('SXS_CONTEXT_PAGE')) {
+    define('SXS_CONTEXT_PAGE', 3); // On front end page
+}
+if (!defined('SXS_IS_ACTIVATION')) {
+    define('SXS_IS_ACTIVATION', true); // Plugin activation is true
+}
+// Assign wp context to a global variable
+global $sxs_wc_valid_context;
+$sxs_wc_valid_context = SXS_CONTEXT_NONE;
+sxs_log('0.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+
+// HPOS Compatibility
+add_action('before_woocommerce_init', function() {
+    if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true);
+    }
+});
+
+register_activation_hook(__FILE__, function() {
+    sxs_wc_blocks_check_woocommerce(SXS_IS_ACTIVATION);
+});
+
+add_action('plugins_loaded', function() {
+    if (!sxs_wc_blocks_check_woocommerce(!SXS_IS_ACTIVATION)) {
+        return;
+    }
+});
+
+// Utiliser le bon filtre en fonction de la version de WordPress
+sxs_log('Enqueue_block_editor_assets.', 'DEBUG');
+function sxs_late_register_block_category() {
+    if (version_compare(get_bloginfo('version'), '5.8', '>=')) {
+        add_filter('block_categories_all', 'sxs_register_block_category', 10, 2);
+    } else {
+        add_filter('block_categories', 'sxs_register_block_category', 10, 2);
+    }
+}
+add_action('enqueue_block_editor_assets', 'sxs_late_register_block_category');
+
+// Assigner la fonction d'initialisation au crochet init
+sxs_log('Assignation au crochet \'init\' de sxs_wc_blocks_init_plugin.', 'DEBUG');
+add_action('init', 'sxs_wc_blocks_init_plugin');
+
+add_action( 'template_redirect', function() use ( &$sxs_wc_valid_context ) {
+    sxs_log('1.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+    sxs_is_valid_wc_context( $sxs_wc_valid_context );
+} );
+
+add_action( 'template_redirect', function() use ( &$sxs_wc_valid_context ) {
+    sxs_log('2.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+    if ( $sxs_wc_valid_context == SXS_CONTEXT_SHOP ) { // Inclure uniquement pour le frontend
+        require_once SXS_WC_BLOCKS_PLUGIN_PATH . 'includes/blocks/category-accordion.php';
+    }
+} );
+
+add_action( 'pre_get_posts', function( $query ) use ( &$sxs_wc_valid_context ) {
+    sxs_log('3.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+    if ( $sxs_wc_valid_context == SXS_CONTEXT_SHOP ) {
+        sxs_log('Get and sort categories.', 'DEBUG');
+        $categories = get_terms( [
+                'taxonomy'   => 'product_cat', // Taxonomie pour les catégories WooCommerce
+                'hide_empty' => false,         // Inclure les catégories vides
+                'orderby'    => 'name',        // Trier par nom
+                'order'      => 'DESC',         // Ordre croissant
+            ] );
+            
+        if ( ! is_wp_error( $categories ) ) {
+            // Créer un tableau structuré pour stocker les catégories
+            sxs_log('Non hiearchical sorted categories : ' . print_r ($categories, true), 'DEBUG');
+                  
+            // Création de la racine
+            $tree = [
+                0 => [
+                    'category' => (object) [ 'term_id' => 0, 'name' => 'Racine', 'parent' => 0 ],
+                    'categories' => [],
+                    ],
+                ];
+
+            // Variables globales pour le suivi
+            $tree_level = 0;
+          
+            $categories_level[$tree_level][] = $tree[$tree_level]['category']->term_id; // Catégorie racine
+
+            $index = [];
+            build_index($tree, $index); // Construire l'index
+            
+            //sxs_log('Starting categories level : ' . print_r ($categories_level, true), 'DEBUG');
+            //sxs_log('Starting tree index : ' . print_r ($index, true), 'DEBUG');
+                
+            // Construire l'arborescence en partant de la racine
+            assign_categories_to_tree( $tree, $categories, $index, $categories_level );
+
+            sxs_log('Sorted categories : ' . print_r ($tree, true), 'DEBUG');
+            // sxs_log('Unsorted subcategories : ' . print_r ($sub_categories, true), 'DEBUG');
+        }
+    }    
+} );
+
+function build_index(&$tree, &$index) {
+    foreach ($tree as $term_id => &$node) {
+        $index[$term_id] = &$node; // Crée une référence directe au nœud
+        if (!empty($node['categories'])) {
+            build_index($node['categories'], $index); // Construire l'index récursivement
+        }
+    }
+}
+
+function assign_categories_to_tree(&$tree, &$categories, &$index, &$categories_level, $tree_level = 0) {
+    foreach ($categories as $key => $category) {
+        //sxs_log('Current category key : ' . print_r($key, true), 'DEBUG');
+        //sxs_log('Current category : ' . print_r($category, true), 'DEBUG');
+
+        if (isset($index[$category->parent])) { // Accéder directement au parent via l'index
+            $parent_node = &$index[$category->parent];
+            //sxs_log('Current index (before) : ' . print_r($index, true), 'DEBUG');
+            //sxs_log('Current parent_node (before) : ' . print_r($parent_node, true), 'DEBUG');
+            $parent_node['categories'][$category->term_id] = [
+                'category' => $category,
+                'categories' => [] // Préparer le sous-vecteur pour les enfants
+            ];
+
+            // Ajouter au niveau suivant
+            $categories_level[$tree_level + 1][] = $category->term_id;
+            //sxs_log('Current categories level : ' . print_r($categories_level, true), 'DEBUG');
+
+            //sxs_log('Tree : ' . print_r($tree, true), 'DEBUG');
+
+            // Ajouter cette catégorie dans l'index
+            $index[$category->term_id] = &$parent_node['categories'][$category->term_id];
+            //sxs_log('Current index (after) : ' . print_r($index, true), 'DEBUG');
+            //sxs_log('Current parent_node (after) : ' . print_r($parent_node, true), 'DEBUG');
+
+            // Supprimer la catégorie traitée
+            unset($categories[$key]);
+        }
+    }
+
+    // Vérifier s'il reste des catégories à traiter
+    if (!empty($categories)) {
+        $tree_level++;
+        assign_categories_to_tree($tree, $categories, $index, $categories_level, $tree_level);
+    }
+}
+// function assign_categories_to_tree( &$current_level, &$categories, &$categories_level, $tree_level = 0 ) {
+    
+//     foreach ( $categories as $key => $category ) {
+//         sxs_log('Current category key : ' . print_r ($key, true), 'DEBUG');
+//         sxs_log('Current category : ' . print_r ($category, true), 'DEBUG');
+
+//         if (in_array($category->parent, $categories_level[$tree_level])) {
+//             $current_level[$category->parent]['categories'][$category->term_id] = [
+//                 'category' => $category,
+//                 'categories' => []
+//             ];
+//             $categories_level[$tree_level+1][] = $category->term_id;
+//             sxs_log('Current categories level : ' . print_r ($categories_level, true), 'DEBUG');
+//             sxs_log('Current level : ' . print_r ($current_level, true), 'DEBUG');
+            
+//             unset($categories[$key]);
+//         }
+//     }
+
+//     if ( ! empty( $categories ) ) {
+//         $tree_level++; 
+//         assign_categories_to_tree( $current_level[ $tree_level ], $categories, 
+//                                      $categories_level, $tree_level );     
+//     }
+// }
+
+// // function add_category_to_hierarchy( &$categories, &$subcategories, &$recursion_level, &$elements_processed ) {
+// //     $recursion_level++;
+// //     foreach ( $categories as &$parent ) {
+// //         sxs_log( 'Niveau de récursion : ' . $recursion_level, 'DEBUG' );
+// //         sxs_log('Parent category : ' . print_r ($parent, true), 'DEBUG');
+// //         foreach ( $subcategories as $key => $category ) {
+// //             $elements_processed++;
+// //             sxs_log( 'Élément parcouru : ' . $elements_processed, 'DEBUG' );
+// //             sxs_log('Subcategory : ' . print_r ($category, true), 'DEBUG');
+// //             if ( $parent['category']->term_id === $category->parent ) {
+// //                 $parent['categories'][ $category->term_id ] = [
+// //                     'category' => $category,
+// //                     'categories' => [],
+// //                     ];
+// //                 // Supprimer l'élément assigné de $subcategories
+// //                 unset( $subcategories[ $key ] );
+
+// //                 sxs_log('Categories tree : ' . print_r ($categories, true), 'DEBUG');// Ajouter comme sous-catégorie
+// //             } else {
+// //                 add_category_to_hierarchy( $parent['categories'], $subcategories, $recursion_level, $elements_processed );
+// //             }
+
+// //         }
+// //     } 
+// //     $recursion_level--; 
+// // }
+// function build_categories_hierarchy( $categories ) {
+//     $categories_hierarchy = []; // Initialisation d'un tableau vide
+//     foreach ( $categories as $category ) {
+//         // Ajouter la catégorie (premier niveau ou sous-niveau)
+//         add_category_to_hierarchy( $categories_hierarchy, $category );
+//     }
+//     return $categories_hierarchy; // Retourne la hiérarchie complète
+// }
+
+// function add_category_to_hierarchy( &$hierarchy, $category ) {
+//     // Si c'est une catégorie principale
+//     if (! $category->parent === 0 ) {
+//         $hierarchy[ $category->term_id ] = [
+//             'category' => $category, // Les détails de la catégorie
+//             'children' => [], // Structure prête pour des sous-catégories
+//         ];
+//     } else {
+//         // Si ce n'est pas une catégorie principale, rechercher son parent
+//         foreach ( $hierarchy as &$parent ) {
+//             if ( $parent['category']->term_id === $category->parent ) {
+//                 // Ajouter comme sous-catégorie
+//                 $parent['children'][ $category->term_id ] = [
+//                     'category' => $category,
+//                     'children' => [], // Sous-sous-catégories possibles
+//                 ];
+//                 return;
+//             }
+//             // Récursion dans les sous-catégories
+//             add_category_to_hierarchy( $parent['children'], $category );
+//         }
+//     }
+// }
+
+add_action( 'pre_get_posts', function( $query ) use ( &$sxs_wc_valid_context ) {
+    sxs_log('4.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+    if ( $sxs_wc_valid_context == SXS_CONTEXT_SHOP ) {
+        sxs_log('Modify WC query.', 'DEBUG');
+        sxs_modify_product_query($query) ;
+    }    
+} );
+
+add_filter( 'template_include', function( $template ) use ( &$sxs_wc_valid_context ) {
+    sxs_log('5.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+    if ( $sxs_wc_valid_context == SXS_CONTEXT_SHOP ) {
+        sxs_log('Template: ' . 'template-a', 'DEBUG');
+        return sxs_get_template('template-a');
+    } 
+    return $template; // Retourne le template par défaut si non modifié
+}, 11 );
+
+add_action( 'wp_enqueue_script', function( ) use ( &$sxs_wc_valid_context ) {
+    sxs_log('6.Global variable sxs_wc_valid_context : ' . print_r ($sxs_wc_valid_context, true), 'DEBUG');
+    if ( $sxs_wc_valid_context == SXS_CONTEXT_SHOP ) {
+        sxs_log('Enqueue style.', 'DEBUG');
+        wp_enqueue_style(
+            'sxs-category-accordion-style',
+            SXS_WC_BLOCKS_PLUGIN_URL . 'css/category-accordion.css',
+            [],
+            filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . 'css/category-accordion.css')
+        );
+    }    
+} );
+
+add_action( 'woocommerce_before_shop_loop', function() {
+    // Récupérer l'ID de la page Shop
+    $shop_page_id = wc_get_page_id( 'shop' );
+    if ( $shop_page_id && $shop_post = get_post( $shop_page_id ) ) {
+        // Vérifier si la page Shop contient du contenu
+        if ( ! empty( $shop_post->post_content ) ) {
+            echo '<div class="shop-page-content">';
+            echo apply_filters( 'the_content', $shop_post->post_content ); // Appliquer les filtres pour le rendu du contenu
+            echo '</div>';
+        }
+    }
+}, 10 ); // La priorité par défaut est 10, mais ajustable selon les besoins
+
+// add_action( 'woocommerce_after_shop_loop', function() {
+//         // Prepare any attributes you want to pass to the block render function
+//         $attributes = [
+//             'excludeCategories' => [],
+//             'order' => 'DESC',
+//             'orderBy' => 'date',
+//             'columns' => 4,
+//             'showSubcategories' => true,
+//             // Add other attributes as needed
+//         ];
+    
+//         // Call and echo the block render function to output the block content
+//         echo sxs_category_accordion_render($attributes);
+// }, 10 );
+
+/** Fonction de log conditionnel */
+function sxs_log($message, $level = 'DEBUG') {
+    if (!defined('SXS_WC_BLOCKS_DEBUG') || !SXS_WC_BLOCKS_DEBUG) {
+        error_log("SXS_WC_BLOCKS_DEBUG is not defined or FALSE.");
+        return;
+    }
+
+    $allowed_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
+    if (!in_array($level, $allowed_levels)) {
+        $level = 'DEBUG';
+    }
+
+    $log_dir = SXS_WC_BLOCKS_PLUGIN_PATH . 'log/';
+    $log_file = $log_dir . 'me-sxs-block.log';
+
+    // Vérifier si le dossier log existe, sinon le créer
+    if (!file_exists($log_dir)) {
+        wp_mkdir_p($log_dir);
+    }
+
+    // Vérifier si le dossier est accessible en écriture
+    if (!is_writable($log_dir)) {
+        error_log("SXS Debug: Le dossier log n'est pas accessible en écriture.");
+        return;
+    }
+
+    // Vérifier si le fichier est accessible en écriture
+    if (file_exists($log_file) && !is_writable($log_file)) {
+        error_log("SXS Debug: Impossible d'écrire dans le fichier de log $log_file.");
+        return;
+    }
+
+    // Obtenir le contexte de l'appel
+    $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
+    $caller = isset($backtrace[1]['function']) ? $backtrace[1]['function'] : 'global scope';
+
+    $timestamp = date('Y-m-d H:i:s');
+    $log_message = "[$timestamp] [$level] [$caller] $message\n";
+
+    file_put_contents($log_file, $log_message, FILE_APPEND);
+}
+
+// function index_categories_by_id( $categories ) {
+//     $index = [];
+
+//     foreach ( $categories as $category ) {
+//         $index[ $category['term_id'] ] = &$category; // Création d'une référence à la catégorie dans le tableau principal
+//         if ( isset( $category['children'] ) ) {
+//             $index = array_merge( $index, index_categories_by_id( $category['children'] ) ); // Gestion récursive des sous-catégories
+//         }
+//     }
+
+//     return $index;
+//}
+
+// WooCommerce check
+function sxs_wc_blocks_check_woocommerce($is_activation = false) {
+    sxs_log('Entering fonction with argument is_activation ' 
+        . print_r($is_activation ? 'true' : 'false', true), 'DEBUG');
+    if (!class_exists('WooCommerce')) {
+        sxs_log('WooCommerce n\'est pas actif.', 'DEBUG');
+        if (!function_exists('deactivate_plugins')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        // Désactiver le plugin si WooCommerce n'est pas actif
+        deactivate_plugins(plugin_basename(__FILE__));
+        if ($is_activation){
+            wp_die(
+                __('SXS WC Blocks nécessite WooCommerce pour fonctionner. Veuillez activer WooCommerce avant d\'activer ce plugin.', 'sxs-wc-blocks'),
+                __('Erreur : WooCommerce requis', 'sxs-wc-blocks'),
+                ['back_link' => true]
+            );
+        } else {
+            add_action('admin_notices', function() {
+                echo '<div class="notice notice-error"><p>';
+                _e('SXS WC Blocks a été désactivé car WooCommerce n\'est plus actif. Veuillez réactiver WooCommerce pour utiliser ce plugin.', 'sxs-wc-blocks');
+                echo '</p></div>';
+            });
+        }        
+        return false;
+    }
+    sxs_log('WooCommerce est actif.', 'DEBUG');
+    return true;
+}
+
+/**
+ * Vérifie si le contexte WooCommerce est valide.
+ *
+ * @return bool True si le contexte est valide, False sinon.
+ */
+function sxs_is_valid_wc_context( &$sxs_wc_valid_context ) {
+    sxs_log('Entering valid context verification.', 'DEBUG');
+    // Vérification 1 : WooCommerce est-il actif ?
+    // if (!sxs_wc_blocks_check_woocommerce()) {
+    //     sxs_log('WooCommerce n\'est pas actif.', 'DEBUG');
+    //     $sxs_wc_valid_context = SXS_CONTEXT_NONE;
+    //     return false;
+    // }
+
+    // // Vérification 2 : La requête principale est-elle initialisée ?
+    // if (!did_action('wp')) {
+    //     sxs_log('La requête principale de WordPress n\'est pas encore initialisée.', 'DEBUG');
+    //     $sxs_wc_valid_context = SXS_CONTEXT_NONE;
+    //     return false;
+    // }
+
+    // // Vérification 3 : Sommes-nous dans l'admin ?
+    // if (is_admin()) {
+    //     // Inclure get_current_screen si nécessaire
+    //     if (!function_exists('get_current_screen')) {
+    //         require_once ABSPATH . 'wp-admin/includes/screen.php';
+    //     }
+
+    //     $current_screen = get_current_screen();
+    //     if ($current_screen && method_exists($current_screen, 'is_block_editor') && $current_screen->is_block_editor()) {
+    //         sxs_log('Contexte valide : éditeur de blocs.', 'DEBUG');
+    //         $sxs_wc_valid_context = SXS_CONTEXT_GUTENBERG;
+    //         return true;
+    //     }
+
+    //     sxs_log('Contexte invalide : admin mais pas dans l\'éditeur de blocs.', 'DEBUG');
+    //     $sxs_wc_valid_context = SXS_CONTEXT_NONE;
+    //     return false;
+    // }
+
+    // Vérification 4 : Sommes-nous sur une page WooCommerce ou une page normale ?
+    global $post;
+
+    if (is_shop()) {
+        $shop_page_id = wc_get_page_id('shop');
+        if ($shop_page_id > 0) {
+            $shop_page = get_post($shop_page_id);
+            if ($shop_page && has_blocks($shop_page->post_content)) {
+                if (sxs_has_block_in_content($shop_page->post_content, '*')) {
+                    sxs_log('Contexte valide : page boutique avec blocs SXS.', 'DEBUG');
+                    $sxs_wc_valid_context = SXS_CONTEXT_SHOP;   
+                    return true;
+                }
+            }
+        }
+    } elseif (is_page() && $post) {
+        if (has_blocks($post->post_content)) {
+            if (sxs_has_block_in_content($post->post_content, '*')) {
+                sxs_log('Contexte valide : page normale avec blocs SXS.', 'DEBUG');
+                $sxs_wc_valid_context = SXS_CONTEXT_NORMAL;
+                return true;
+            }
+        }
+    }
+
+    // Si aucune condition n'est satisfaite, retourner false
+    sxs_log('Contexte invalide : aucune condition satisfaite.', 'DEBUG');
+    $sxs_wc_valid_context = SXS_CONTEXT_NONE;
+    return false;
+}
+
+/**
+ * Vérifie la présence de blocs spécifiques dans le contenu
+ * Modifiée pour accepter '*' sans préfixe
+ */
+function sxs_has_block_in_content($content, $block_types = '*') {
+    if (empty($content)) {
+        sxs_log('Empty content in block detection', 'DEBUG');
+        return false;
+    }
+
+    // $cache_key = 'me_sxs_blocks_' . md5($content . serialize($block_types));
+    // $cached = get_transient($cache_key);
+    // if ($cached !== false) {
+    //     return $cached;
+    // }
+
+    sxs_log('Block types to search: ' . (is_array($block_types) ? implode(',', $block_types) : $block_types), 'DEBUG');
+
+    $blocks = parse_blocks($content);
+    //sxs_log('Parsed content in blocks: ' . print_r($blocks, true), 'DEBUG');
+    $found = false;
+
+    $search_blocks = function($block) use (&$search_blocks, &$found, $block_types) {
+        if (empty($block['blockName'])) {
+            return;
+        }
+        if ($block_types === '*' && strpos($block['blockName'], 'me-sxs-block/') === 0) {
+            $found = true;
+            sxs_log("Found block - " . $block['blockName'], 'DEBUG');
+            return;
+        }
+        if (is_array($block_types) ? in_array($block['blockName'], $block_types) : $block['blockName'] === $block_types) {
+            $found = true;
+            sxs_log("Found specific block - " . $block['blockName'], 'DEBUG');
+            return;
+        }
+        if (!empty($block['innerBlocks'])) {
+            foreach ($block['innerBlocks'] as $inner_block) {
+                if ($found) break;
+                $search_blocks($inner_block);
+            }
+        }
+    };
+
+    foreach ($blocks as $block) {
+        //sxs_log("Checking block - " . print_r($block, true), 'DEBUG');
+        if ($found) break;
+        $search_blocks($block);
+    }
+    
+    // Cache the result for 10 minutes
+    //set_transient($cache_key, $found, 10 * MINUTE_IN_SECONDS);
+    return $found;
+}
+
+/**
+ * Enregistre tous les blocs SXS WC Blocks.
+ */
+function sxs_register_blocks() {
+    $blocks = [
+        'me-sxs-block/category-accordion' => [
+            'editor_script'   => 'sxs-category-accordion-editor-script',
+            'editor_style'    => 'sxs-category-accordion-editor-style',
+            'style'           => 'sxs-category-accordion-style',
+            'render_callback' => 'sxs_category_accordion_render',
+            'attributes'      => array(
+                'excludeCategories' => array(
+                    'type'    => 'array',
+                    'default' => array(),
+                ),
+                // Other attributes remain the same
+            ),
+        ],
+        // 'me-sxs-block/product-grid' => [
+        //     'render_callback' => 'sxs_render_product_grid',
+        //     'attributes' => [
+        //         'columns' => ['type' => 'number', 'default' => 4],
+        //         'orderby' => ['type' => 'string', 'default' => 'date'],
+        //         'order'   => ['type' => 'string', 'default' => 'DESC'],
+        //     ],
+        //     'editor_style'    => 'sxs-product-grid-editor',
+        //     'style'           => 'sxs-product-grid',
+        // ],
+    ];
+
+    // Enregistrer les styles communs
+    // wp_register_style(
+    //     'sxs-wc-blocks-common',
+    //     SXS_WC_BLOCKS_PLUGIN_URL . 'build/style-common.css',
+    //     [],
+    //     filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . 'build/style-common.css')
+    // );
+
+    foreach ($blocks as $name => $args) {
+        // Enregistrer les styles spécifiques pour chaque bloc
+        $block_slug = str_replace('me-sxs-block/', '', $name);
+        
+        // Styles éditeur
+        $src_dir = file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . "build/{$block_slug}-editor.css") 
+            ? "build/" : "css/";
+        if (file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.css")) {
+            wp_register_style(
+                "sxs-{$block_slug}-editor-style",
+                SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}-editor.css",
+                ['wp-edit-blocks'],
+                filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.css")
+            );
+
+        }
+        // Styles frontend
+        $src_dir = file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . "build/{$block_slug}.css") 
+            ? "build/" : "css/";
+        if (file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}.css")) {
+            sxs_log('Registering frontend style: ' . SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}.css", 'DEBUG');
+            wp_register_style(
+                "sxs-{$block_slug}-style",
+                SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}.css",
+                [],
+                filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}.css")
+            );
+        }
+        // Script principal
+        $src_dir = file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . "build/{$block_slug}-editor.js") 
+            ? "build/" : "js/";
+        if (file_exists(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.js")) {
+            wp_register_script(
+                "sxs-{$block_slug}-editor-script",
+                SXS_WC_BLOCKS_PLUGIN_URL . $src_dir . "{$block_slug}-editor.js",
+                ['wp-blocks', 'wp-element', 'wp-editor', 'wp-components', 'wp-i18n'],
+                filemtime(SXS_WC_BLOCKS_PLUGIN_PATH . $src_dir . "{$block_slug}-editor.js"),
+                true
+            );
+        }
+        
+        // Vérifier si la fonction de rappel existe
+        sxs_log("Does render callback function exists: " . 
+            (function_exists($args['render_callback']) ? 'Yes' : 'No'), 'DEBUG');
+        // Enregistrer le bloc
+        sxs_log("Enregistrement du bloc : $name", 'DEBUG');
+        sxs_log("Enregistrement du bloc args : " . print_r($args,true), 'DEBUG');
+        
+        register_block_type($name, $args);
+        if (WP_Block_Type_Registry::get_instance()->is_registered($name)) {
+            sxs_log("Bloc enregistré : $name", 'INFO');
+        } else {
+            sxs_log("Bloc non enregistré : $name", 'INFO');
+        }       
+        sxs_log("Bloc enregistré args : " . print_r ($args['render_callback'],true), 'INFO');
+    }
+}
+
+function sxs_register_block_category( $categories ) {
+    //sxs_log('Categories before adding SXS WC Blocks: ' . print_r($categories, true), 'DEBUG');
+    $new_categories = array_merge( $categories,
+        [
+            [
+                'slug' => 'me-sxs-category',
+                'title' => __( 'SXS WC Blocks', 'me-sxs-block' ),
+                'icon' => 'category', // Icône optionnelle pour la catégorie.
+            ],
+        ]
+    );
+    sxs_log('Categories after adding SXS WC Blocks: ' . print_r($new_categories, true), 'DEBUG');
+    return $new_categories;
+}
+
+// Initialisation des blocs
+function sxs_wc_blocks_init_plugin() {
+    sxs_log('Initialisation du plugin commencée.', 'DEBUG');
+   
+    sxs_log('Enregistrement des blocs.', 'DEBUG');
+    // Charger et enregistrer les blocs nécessaires
+    sxs_register_blocks();
+
+    sxs_log('Initialisation du plugin terminée');
+}
+
+function sxs_get_template($template_name, $default = 'template-a') {
+    $template_file = SXS_WC_BLOCKS_PLUGIN_PATH . "templates/{$template_name}.php";
+    if (file_exists($template_file)) {
+        sxs_log("Template file included: {$template_file}", 'DEBUG');
+        return ( $template_file );
+    } else {
+        sxs_log("Template file missing: {$template_file}", 'WARNING');
+    }
+}
+
+/**
+ * Modifie la requête des produits pour la page shop
+ */
+function sxs_modify_product_query($query) {
+    // Ne procéder que si c'est la requête principale
+    //sxs_log("Modify query : " . print_r($query, true), 'DEBUG');
+    sxs_log("Modifying query.", 'DEBUG');
+    if ($query->is_main_query() && is_shop()) {
+        // Configuration du tri hiérarchique
+        $query->set('orderby', array(
+            'menu_order' => 'ASC',
+            'tax_product_cat' => 'ASC', 
+            'title' => 'ASC'
+        ));
+
+        // Configuration de la hiérarchie des catégories
+        $tax_query = array(
+            'taxonomy' => 'product_cat',
+            'field' => 'term_id',
+            'terms' => get_queried_object_id(),
+            'include_children' => true
+        );
+
+        $query->set('tax_query', $tax_query);
+    }
+}
+

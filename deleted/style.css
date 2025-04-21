@@ -1,0 +1,189 @@
+/**
+ * WooCommerce Category Accordion Block - Styles
+ * Version: 1.0.0
+ * 
+ * Organized into logical sections with vendor prefixes
+ * and consistent formatting.
+ */
+
+/* ======================
+   Main Container Styles
+   ====================== */
+.wp-block-me-sxs-wc-block {
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+/* ======================
+   Category Header Styles
+   ====================== */
+.category-title h3 {
+    margin: 20px 0 10px;
+    font-size: var(--title-font-size);
+    font-weight: bold;
+    color: var(--title-font-color);
+}
+
+.category-separator {
+    margin: 10px 0 20px;
+}
+
+.category-separator hr {
+    border: var(--separator-thickness) solid var(--separator-color);
+    margin: 0;
+}
+
+.subcategory-title h4 {
+    margin: 15px 0 10px;
+    font-size: 20px;
+    font-weight: bold;
+    color: #555;
+}
+
+/* ======================
+   Product Grid Layout
+   ====================== */
+.product-grid {
+    display: -ms-grid;
+    display: grid;
+    -ms-grid-columns: 1fr 1fr 1fr 1fr; /* Fallback for IE */
+    grid-template-columns: repeat(4, 1fr); /* Default 4 columns */
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+/* Extra small devices (phones, 480px and down) */
+@media (max-width: 480px) {
+    .product-grid {
+        -ms-grid-columns: 1fr;
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+    .product-item {
+        margin: 8px 0;
+    }
+}
+
+/* Small devices (phones, 481px to 768px) */
+@media (min-width: 481px) and (max-width: 768px) {
+    .product-grid {
+        -ms-grid-columns: 1fr 1fr;
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Medium devices (tablets, 769px to 1024px) */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .product-grid {
+        -ms-grid-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Large devices (desktops, 1025px and up) */
+@media (min-width: 1025px) {
+    .product-grid {
+        -ms-grid-columns: 1fr 1fr 1fr 1fr;
+        grid-template-columns: repeat(var(--columns, 4), 1fr);
+    }
+}
+
+/* Theme integration */
+.wp-block-me-sxs-wc-block {
+    --title-font-color: var(--wp--preset--color--foreground, #333333);
+    --separator-color: var(--wp--preset--color--border, #dddddd);
+    --product-border-color: var(--wp--preset--color--border, #dddddd);
+    --accordion-title-font-color: var(--wp--preset--color--heading, #333333);
+    font-family: var(--wp--preset--font-family--system);
+}
+
+/* ======================
+   Product Item Styles
+   ====================== */
+.product-item {
+    font-size: var(--product-font-size);
+    margin: var(--product-margin);
+    border: var(--product-border-style) solid var(--product-border-color);
+    padding: 10px;
+    text-align: center;
+    background-color: #f9f9f9;
+}
+
+.product-item img {
+    max-width: 100%;
+    height: auto;
+    margin-bottom: 10px;
+}
+
+.product-item h5 {
+    margin: 10px 0 5px;
+    font-size: 16px;
+    font-weight: bold;
+    color: #333;
+}
+
+.product-item p {
+    font-size: 14px;
+    color: #777;
+}
+
+/* ======================
+   Accordion Functionality
+   ====================== */
+.accordion-title {
+    font-size: var(--accordion-title-font-size);
+    color: var(--accordion-title-font-color);
+    display: -webkit-box;
+    display: -ms-flexbox;
+    display: flex;
+    -webkit-box-pack: start;
+    -ms-flex-pack: start;
+    justify-content: flex-start;
+    -webkit-box-align: center;
+    -ms-flex-align: center;
+    align-items: center;
+    cursor: pointer;
+    padding: 10px 15px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    font-weight: bold;
+    border-bottom: 1px solid var(--accordion-title-separator-color);
+}
+
+.accordion-caret {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    margin-right: 10px;
+    color: var(--accordion-caret-color);
+    position: relative;
+}
+
+.accordion-caret::before {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background-image: var(--accordion-caret-image, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'%3E%3Cpath d='M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z'/%3E%3C/svg%3E"));
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    -webkit-transition: -webkit-transform 0.3s ease;
+    transition: -webkit-transform 0.3s ease;
+    -o-transition: transform 0.3s ease;
+    transition: transform 0.3s ease;
+    transition: transform 0.3s ease, -webkit-transform 0.3s ease;
+}
+
+.accordion-content {
+    display: none;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-top: none;
+}
+
+.accordion-content.open {
+    display: block;
+}
